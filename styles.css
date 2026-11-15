@@ -276,3 +276,62 @@ textarea.in { min-height: 84px; resize: vertical; }
 a.card { display: block; text-decoration: none; color: inherit; }
 a.card:active { background: #fafbff; }
 .nom-grande { font-size: 1.2rem; font-weight: 750; }
+
+/* ───── Pantallas anchas (computadora) ───── */
+.cards-grid { display: block; }
+.dos-col { display: block; }
+.rep-tabla { display: none; }
+
+@media (min-width: 900px) {
+  body { font-size: 15px; }
+  #app { max-width: none; }
+  .topbar { padding-left: 24px; padding-right: 16px; min-height: 60px; }
+  .topbar h1 { font-size: 1.25rem; }
+
+  /* Menú lateral en lugar de barra inferior */
+  .tabbar {
+    top: 60px; bottom: 0; left: 0; right: auto; width: 230px; max-width: none; margin: 0;
+    display: flex; flex-direction: column; align-items: stretch; gap: 4px;
+    padding: 16px 12px; border-top: 0; border-right: 1px solid var(--line);
+  }
+  .tab { flex-direction: row; gap: 12px; padding: 12px 14px; border-radius: 12px; font-size: 0.98rem; }
+  .tab:hover, .tab.on { background: var(--primary-l); }
+  .tab.nueva { order: -1; background: var(--primary); color: #fff; justify-content: center; margin-bottom: 12px; }
+  .tab.nueva:hover { background: var(--primary-d); }
+  .tab.nueva span.fab { width: auto; height: auto; margin: 0; background: transparent; box-shadow: none; border: 0; }
+  .tab.nueva span.fab svg { width: 22px; height: 22px; stroke: #fff; }
+
+  main { margin-left: 230px; padding: 24px 32px 48px; max-width: 1320px; }
+  .toast { bottom: 24px; }
+
+  .tiles { grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); }
+  .cards-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(380px, 1fr)); gap: 14px; align-items: start; }
+  .cards-grid > .card, .cards-grid > a.card { margin-bottom: 0; }
+  .cards-grid > .vacio { grid-column: 1 / -1; }
+  .dos-col { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 24px; align-items: start; }
+  .estrecho, .limitado { max-width: 720px; }
+  .buscar { max-width: 640px; top: 60px; }
+  .filtros { max-width: 720px; }
+  .pills { flex-wrap: wrap; }
+
+  .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0 20px; align-items: start; }
+  .form-grid > #form-errores, .form-grid > h2, .form-grid > #prendas-form, .form-grid > .btn { grid-column: 1 / -1; }
+  .form-grid > .btn { max-width: 360px; }
+  #prendas-form { display: grid; grid-template-columns: 1fr 1fr; gap: 0 16px; align-items: start; }
+
+  .rep-cards { display: none; }
+  .rep-tabla { display: block; }
+  .tabla-wrap { overflow: auto; background: #fff; border-radius: var(--radius); box-shadow: var(--shadow); max-height: 68vh; }
+  .tabla { border-collapse: collapse; width: 100%; font-size: 0.85rem; white-space: nowrap; }
+  .tabla th { position: sticky; top: 0; background: var(--primary); color: #fff; text-align: left; padding: 10px 12px; font-weight: 600; }
+  .tabla td { padding: 8px 12px; border-bottom: 1px solid var(--line); }
+  .tabla tbody tr:nth-child(even) { background: #fafbff; }
+  .tabla tbody tr:hover td { background: var(--primary-l); }
+}
+
+/* Elementos del menú que solo existen en computadora */
+.marca { display: none; }
+.solo-pc { display: none; }
+@media (min-width: 900px) {
+  .solo-pc { display: flex; }
+}

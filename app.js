@@ -7,6 +7,9 @@ const { ESTADOS, ESTADOS_RESERVA, REPORTES } = C;
 
 /* ───────────── Estado ───────────── */
 
+const VERSION_CONFIG = 2;
+const VENDEDORAS_INICIALES = ['Grecia', 'Tatiana'];
+
 const filtrosVacios = () => ({
   q: '', estado: '', estadoPrenda: '', vendedora: '', desde: '', hasta: '', tiendaOrigen: '', tiendaSolicitante: '',
 });
@@ -14,7 +17,7 @@ const filtrosVacios = () => ({
 const S = {
   reservas: [],
   prendas: [],
-  config: { tiendaActual: '', vendedoras: [], tiendas: [], diasAviso: 2, diasSeparacion: 7 },
+  config: { version: VERSION_CONFIG, tiendaActual: '', vendedoras: [...VENDEDORAS_INICIALES], tiendas: [], diasAviso: 1, diasSeparacion: C.DIAS_PLAZO },
   filtros: filtrosVacios(),
   mostrarFiltros: false,
   reporte: { id: 'periodo', desde: '', hasta: '', vendedora: '' },
@@ -32,13 +35,14 @@ const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 const esc = (s) =>
   String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 const hoy = () => C.hoyISO();
+const plazo = () => S.config.diasSeparacion;
 const ir = (hash) => {
   if (location.hash === hash) render();
   else location.hash = hash;
 };
 
 function vistas() {
-  return C.enriquecer({ reservas: S.reservas, prendas: S.prendas }, hoy(), S.config.diasAviso);
+  return C.enriquecer({ reservas: S.reservas, prendas: S.prendas }, hoy(), S.config.diasAviso, plazo());
 }
 
 function unicos(arr) {
@@ -101,7 +105,9 @@ function chipReserva(v) {
   return `<span class="chip st-${v.estado}">${esc(ESTADOS_RESERVA[v.estado])}</span>`;
 }
 
+/** Texto y color para los días que faltan (o pasaron) del plazo de una reserva. */
 function diasTexto(v) {
+  if (v.dias === null) return ['', ''];
   if (v.estado === 'activa') {
     if (v.dias === 0) return ['Vence hoy', 'warn'];
     if (v.dias === 1) return ['Vence mañana', 'warn'];
@@ -115,6 +121,8 @@ function diasTexto(v) {
 }
 
 const barra = (pct) => `<div class="barra" role="progressbar" aria-valuenow="${pct}" aria-valuemin="0" aria-valuemax="100"><i style="width:${pct}%"></i></div>`;
+
+const textoPlazoInicio = () => `El plazo de ${plazo()} días empieza cuando la prenda llega a la tienda.`;
 
 /* ───────────── Persistencia ───────────── */
 
@@ -148,6 +156,7 @@ const ICONOS = {
   mas: '<svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>',
   vend: '<svg viewBox="0 0 24 24"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20c0-3.6 2.9-6 6.5-6s6.5 2.4 6.5 6"/><path d="M16 4.6a3.5 3.5 0 0 1 0 6.8M18 14.4c2.2.7 3.5 2.6 3.5 5.6"/></svg>',
   rep: '<svg viewBox="0 0 24 24"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></svg>',
+  ajustes: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M19.1 4.9L17 7M7 17l-2.1 2.1"/></svg>',
 };
 
 function ruta() {
@@ -157,14 +166,15 @@ function ruta() {
 }
 
 function pintarTabbar(n) {
-  const grupo = { panel: 'panel', lista: 'lista', reserva: 'lista', prenda: 'lista', editar: 'lista', nueva: 'nueva', vendedoras: 'vendedoras', reportes: 'reportes' }[n];
-  const t = (id, href, icono, texto) => `<a class="tab${grupo === id ? ' on' : ''}" href="${href}"${grupo === id ? ' aria-current="page"' : ''}>${icono}<span>${texto}</span></a>`;
+  const grupo = { panel: 'panel', lista: 'lista', reserva: 'lista', prenda: 'lista', editar: 'lista', nueva: 'nueva', vendedoras: 'vendedoras', reportes: 'reportes', ajustes: 'ajustes' }[n];
+  const t = (id, href, icono, texto, extra = '') => `<a class="tab${grupo === id ? ' on' : ''}${extra}" href="${href}"${grupo === id ? ' aria-current="page"' : ''}>${icono}<span>${texto}</span></a>`;
   $('#tabbar').innerHTML =
     t('panel', '#/panel', ICONOS.panel, 'Panel') +
     t('lista', '#/lista', ICONOS.lista, 'Separaciones') +
     `<a class="tab nueva" href="#/nueva" aria-label="Nueva separación"><span class="fab">${ICONOS.mas}</span><span>Nueva</span></a>` +
     t('vendedoras', '#/vendedoras', ICONOS.vend, 'Vendedoras') +
-    t('reportes', '#/reportes', ICONOS.rep, 'Reportes');
+    t('reportes', '#/reportes', ICONOS.rep, 'Reportes') +
+    t('ajustes', '#/ajustes', ICONOS.ajustes, 'Ajustes', ' solo-pc');
 }
 
 function render(reset = true) {
@@ -196,6 +206,7 @@ function render(reset = true) {
   $('#titulo').textContent = res.titulo;
   document.title = res.titulo + ' · Separaciones';
   vm.innerHTML = res.html;
+  vm.dataset.ruta = n;
   const sub = ['nueva', 'editar', 'reserva', 'prenda', 'ajustes'].includes(n);
   $('#btn-atras').hidden = !sub;
   $('#btn-ajustes').hidden = n === 'ajustes';
@@ -222,7 +233,7 @@ function vistaPanel() {
   if (c.vencidas > 0)
     avisos.push(`<button type="button" class="aviso mal" data-act="ir-filtro" data-estado="vencida"><b>${c.vencidas} ${c.vencidas === 1 ? 'separación vencida' : 'separaciones vencidas'}</b> ${c.vencidas === 1 ? 'requiere' : 'requieren'} decisión.</button>`);
   if (c.porVencer > 0)
-    avisos.push(`<button type="button" class="aviso warn" data-act="ir-filtro" data-estado="porvencer"><b>${c.porVencer} ${c.porVencer === 1 ? 'separación vence' : 'separaciones vencen'}</b> en los próximos ${S.config.diasAviso} días.</button>`);
+    avisos.push(`<button type="button" class="aviso warn" data-act="ir-filtro" data-estado="porvencer"><b>${c.porVencer} ${c.porVencer === 1 ? 'separación vence' : 'separaciones vencen'}</b> ${S.config.diasAviso === 0 ? 'hoy' : S.config.diasAviso === 1 ? 'hoy o mañana' : 'en los próximos ' + S.config.diasAviso + ' días'}.</button>`);
   if (c.consulta > 0)
     avisos.push(`<button type="button" class="aviso info" data-act="ir-filtro" data-prenda="consulta"><b>${c.consulta} ${c.consulta === 1 ? 'consulta' : 'consultas'}</b> sin respuesta de otras tiendas.</button>`);
   if (!avisos.length && vs.length) avisos.push('<div class="aviso ok">Todo al día: no hay tareas urgentes.</div>');
@@ -245,7 +256,7 @@ function vistaPanel() {
 
   const proximas = C.ordenarVistas(vs.filter((v) => v.estado === 'activa' || v.estado === 'vencida')).slice(0, 5);
   if (proximas.length) {
-    html += '<h2>Requieren atención primero</h2>' + proximas.map(tarjetaReserva).join('');
+    html += '<h2>Requieren atención primero</h2><div class="cards-grid">' + proximas.map(tarjetaReserva).join('') + '</div>';
   }
   if (!vs.length) {
     html = `<div class="vacio"><b>Aún no hay separaciones</b>Toca el botón <b style="display:inline">+</b> para registrar la primera.</div>`;
@@ -260,15 +271,16 @@ function tarjetaReserva(v) {
   const [dt, dcls] = diasTexto(v);
   const lineas = v.ps.slice(0, 4).map((p, i) => {
     const origen = p.enStock ? 'en esta tienda' : p.tiendaOrigen ? `→ ${p.tiendaOrigen}` : '';
-    return `<div class="linea">${chip(v.est[i])}<span class="t"><b>${esc(p.sku)}</b> · ${esc(p.descripcion)}${origen ? ' ' + esc(origen) : ''}</span></div>`;
+    return `<div class="linea">${chip(v.est[i])}<span class="t"><b>${esc(p.sku)}</b> · ${esc(p.subclase)}${origen ? ' ' + esc(origen) : ''}</span></div>`;
   });
   const extra = v.ps.length > 4 ? `<div class="small muted">+ ${v.ps.length - 4} prendas más</div>` : '';
+  const izq = v.limite ? `Límite: ${esc(C.fmtFecha(v.limite))}` : v.estado === 'activa' ? 'Plazo: desde que llegue a tienda' : '';
   return `<a class="card sep-item" href="#/reserva/${esc(r.id)}">
     <div class="row between"><div class="grow"><div class="nom">${esc(C.nombreCliente(r))}</div>
       <div class="meta">Vendedora: ${esc(r.vendedora)} · ${esc(r.tienda)}</div></div>${chipReserva(v)}</div>
     <div class="lineas">${lineas.join('')}${extra}</div>
     ${v.prog.total ? barra(v.prog.pct) : ''}
-    <div class="row between mt small"><span class="muted">Límite: ${esc(C.fmtFecha(r.fechaLimite))}</span><span class="dias ${dcls}">${esc(dt)}</span></div>
+    <div class="row between mt small"><span class="muted">${izq}</span><span class="dias ${dcls}">${esc(dt)}</span></div>
   </a>`;
 }
 
@@ -314,11 +326,11 @@ function vistaLista() {
   const nf = contarFiltros();
   const pills = PILLS.map(([v, t]) => `<button type="button" class="pill${f.estado === v ? ' on' : ''}" data-act="pill" data-v="${v}">${t}</button>`).join('');
   const r = resultadosLista();
-  const html = `<div class="buscar"><input id="q" class="in" type="search" placeholder="Cliente, celular, SKU, vendedora, tienda…" value="${esc(f.q)}" autocomplete="off"></div>
+  const html = `<div class="buscar"><input id="q" class="in" type="search" placeholder="Cliente, celular, código, vendedora, tienda…" value="${esc(f.q)}" autocomplete="off"></div>
     <div class="pills">${pills}<button type="button" class="pill${nf ? ' on' : ''}" data-act="toggle-filtros">Filtros${nf ? ' (' + nf + ')' : ''} ▾</button></div>
     ${htmlFiltros()}
     <div class="contador" id="contador">${r.cont}</div>
-    <div id="lista-res">${r.html}</div>`;
+    <div id="lista-res" class="cards-grid">${r.html}</div>`;
   return { titulo: 'Separaciones', html };
 }
 
@@ -358,24 +370,18 @@ function vistaForm(id) {
     const p = C.nuevaPrenda(r.id, r.tienda, 0);
     S.borrador = { editando: false, r, ps: [{ ...p, _stock: false }], borrar: [] };
   }
-  return { titulo, html: htmlForm(), after: () => {} };
+  return { titulo, html: htmlForm() };
 }
 
 function bloquePrenda(p, i, total) {
   const e = C.etapa(p);
   const puedeStock = e === 'pendiente' || (e === 'recibida' && p.enStock);
   return `<div class="bloque-prenda" data-pid="${esc(p.id)}">
-    <div class="cab"><span>Prenda ${i + 1}${p._existe ? ' · ' + chip(C.estadoPrenda(p, S.borrador.r, hoy())) : ''}</span>
+    <div class="cab"><span>Prenda ${i + 1}${p._existe ? ' · ' + chip(C.estadoPrenda(p, hoy(), plazo())) : ''}</span>
       ${total > 1 ? `<button type="button" class="btn peligro peq" data-act="quitar-prenda" data-id="${esc(p.id)}">Quitar</button>` : ''}</div>
     <div class="g2">
-      <label class="f">Código o SKU <span class="req">*</span><input class="in" data-f="sku" value="${esc(p.sku)}" autocomplete="off" autocapitalize="characters"></label>
-      <label class="f">Subclase / tipo<input class="in" data-f="subclase" list="dl-sub" value="${esc(p.subclase)}" autocomplete="off"></label>
-    </div>
-    <label class="f">Descripción <span class="req">*</span><input class="in" data-f="descripcion" value="${esc(p.descripcion)}" autocomplete="off"></label>
-    <div class="g3">
-      <label class="f">Talla<input class="in" data-f="talla" value="${esc(p.talla)}" autocomplete="off"></label>
-      <label class="f">Color<input class="in" data-f="color" value="${esc(p.color)}" autocomplete="off"></label>
-      <label class="f">Precio (S/) <span class="req">*</span><input class="in" data-f="precio" inputmode="decimal" value="${esc(p.precio)}" autocomplete="off"></label>
+      <label class="f">Código de la prenda <span class="req">*</span><input class="in" data-f="sku" value="${esc(p.sku)}" autocomplete="off" autocapitalize="characters"></label>
+      <label class="f">Subclase <span class="req">*</span><input class="in" data-f="subclase" list="dl-sub" value="${esc(p.subclase)}" autocomplete="off" placeholder="Ej.: Chompa"></label>
     </div>
     <label class="f">Observaciones de la prenda<input class="in" data-f="obs" value="${esc(p.obs)}" autocomplete="off"></label>
     ${puedeStock ? `<label class="chk"><input type="checkbox" data-f="_stock"${p._stock ? ' checked' : ''}> Ya está en esta tienda (hay stock, no requiere transferencia)</label>` : ''}
@@ -384,7 +390,9 @@ function bloquePrenda(p, i, total) {
 
 function htmlForm() {
   const { r, ps } = S.borrador;
-  return `<form id="form-sep" novalidate onsubmit="return false">
+  const vend = listaVendedoras();
+  const enLista = vend.some((x) => C.norm(x) === C.norm(r.vendedora));
+  return `<form id="form-sep" class="form-grid" novalidate onsubmit="return false">
     <div id="form-errores"></div>
     <div class="card">
       <h3>Cliente</h3>
@@ -396,21 +404,21 @@ function htmlForm() {
     </div>
     <div class="card">
       <h3>Separación</h3>
+      <label class="f">Vendedora responsable <span class="req">*</span>
+        <select class="in" name="vendedoraSel"><option value="">Selecciona…</option>${opciones(vend, enLista ? r.vendedora : '')}<option value="__otra">Otra persona…</option></select></label>
+      <label class="f" id="wrap-otra" hidden>Nombre de la vendedora<input class="in" name="vendedoraOtra" value="" autocomplete="off" autocapitalize="words"></label>
       <div class="g2">
-        <label class="f">Vendedora responsable <span class="req">*</span><input class="in" name="vendedora" list="dl-vend" value="${esc(r.vendedora)}" autocomplete="off" autocapitalize="words"></label>
         <label class="f">Tienda <span class="req">*</span><input class="in" name="tienda" list="dl-tienda" value="${esc(r.tienda)}" autocomplete="off" autocapitalize="words"></label>
-      </div>
-      <div class="g2">
         <label class="f">Fecha de registro <span class="req">*</span><input class="in" name="fechaRegistro" type="date" value="${esc(r.fechaRegistro)}"></label>
-        <label class="f">Fecha límite <span class="req">*</span><input class="in" name="fechaLimite" type="date" value="${esc(r.fechaLimite)}"></label>
       </div>
-      <label class="f">Observaciones adicionales<textarea class="in" name="observaciones" rows="2">${esc(r.observaciones)}</textarea></label>
+      <label class="f">Observaciones adicionales<textarea class="in" name="observaciones" rows="2" placeholder="Ej.: el cliente avisó que viaja y recogerá después">${esc(r.observaciones)}</textarea></label>
+      <p class="small muted" style="margin:0">${esc(textoPlazoInicio())} Se puede extender si el cliente lo pide.</p>
     </div>
     <h2>Prendas separadas</h2>
     <div id="prendas-form">${ps.map((p, i) => bloquePrenda(p, i, ps.length)).join('')}</div>
     <button type="button" class="btn sec block mb" data-act="add-prenda">+ Agregar otra prenda</button>
     <button type="button" class="btn block" data-act="guardar-sep">${S.borrador.editando ? 'Guardar cambios' : 'Guardar separación'}</button>
-    ${datalist('dl-vend', listaVendedoras())}${datalist('dl-tienda', listaTiendas())}${datalist('dl-sub', listaSubclases())}
+    ${datalist('dl-tienda', listaTiendas())}${datalist('dl-sub', listaSubclases())}
   </form>`;
 }
 
@@ -418,9 +426,11 @@ function leerForm() {
   const f = $('#form-sep');
   if (!f || !S.borrador) return;
   const b = S.borrador;
-  for (const k of ['nombre', 'apellido', 'celular', 'vendedora', 'tienda', 'fechaRegistro', 'fechaLimite', 'observaciones']) {
+  for (const k of ['nombre', 'apellido', 'celular', 'tienda', 'fechaRegistro', 'observaciones']) {
     b.r[k] = f.elements[k].value;
   }
+  const sel = f.elements.vendedoraSel.value;
+  b.r.vendedora = sel === '__otra' ? f.elements.vendedoraOtra.value.trim() : sel;
   for (const div of $$('.bloque-prenda', f)) {
     const p = b.ps.find((x) => x.id === div.dataset.pid);
     if (!p) continue;
@@ -445,8 +455,8 @@ async function guardarSeparacion() {
     tienda: b.r.tienda.trim(),
     observaciones: b.r.observaciones.trim(),
   };
-  const ps = b.ps.map((p) => ({ ...p, precio: String(p.precio).trim().replace(',', '.') }));
-  const errores = C.validarReserva(r, ps);
+  delete r.fechaLimite; // ya no se usa: el plazo corre por prenda desde que llega a tienda
+  const errores = C.validarReserva(r, b.ps);
   const caja = $('#form-errores');
   if (errores.length) {
     caja.innerHTML = `<div class="errores"><b>Revisa estos datos:</b><ul>${errores.map((e) => `<li>${esc(e)}</li>`).join('')}</ul></div>`;
@@ -456,17 +466,13 @@ async function guardarSeparacion() {
   caja.innerHTML = '';
   let finales;
   try {
-    finales = ps.map((p, i) => {
+    finales = b.ps.map((p, i) => {
       let q = {
         ...p,
         orden: i,
         sku: p.sku.trim(),
-        descripcion: p.descripcion.trim(),
         subclase: p.subclase.trim(),
-        talla: p.talla.trim(),
-        color: p.color.trim(),
         obs: p.obs.trim(),
-        precio: String(Number(p.precio)),
         tiendaSolicitante: r.tienda,
       };
       const quiereStock = q._stock;
@@ -500,39 +506,39 @@ function vistaReserva(id) {
   if (!v) return null;
   const r = v.r;
   const [dt, dcls] = diasTexto(v);
-  const total = v.ps.filter((p) => !p.fechaCancelacion).reduce((s, p) => s + (Number(p.precio) || 0), 0);
   const tel = r.celular.replace(/[^\d+]/g, '');
   const items = v.ps
     .map((p, i) => {
-      const detalle = [p.subclase, p.talla && 'Talla ' + p.talla, p.color, C.fmtPrecio(p.precio)].filter(Boolean).join(' · ');
       const origen = p.enStock ? 'Stock en esta tienda' : p.tiendaOrigen ? `Origen: ${p.tiendaOrigen}` : 'Origen: por definir';
+      const lim = v.lims[i] && !p.fechaEntrega && !p.fechaCancelacion ? ` · Plazo hasta ${C.fmtFecha(v.lims[i])}` : '';
       return `<a class="prenda-item" href="#/prenda/${esc(p.id)}">
-        <div class="row between"><div class="t1">${esc(p.sku)} · ${esc(p.descripcion)}</div>${chip(v.est[i])}</div>
-        <div class="t2">${esc(detalle)}</div><div class="t2">${esc(origen)}</div></a>`;
+        <div class="row between"><div class="t1">${esc(p.sku)} · ${esc(p.subclase)}</div>${chip(v.est[i])}</div>
+        <div class="t2">${esc(origen + lim)}</div>${p.obs ? `<div class="t2">${esc(p.obs)}</div>` : ''}</a>`;
     })
     .join('');
   const hayCanceladas = v.ps.some((p) => p.fechaCancelacion);
-  const html = `<div class="card">
+  const plazoHtml = v.limite
+    ? `${esc(C.fmtFecha(v.limite))} <span class="dias ${dcls}">${esc(dt)}</span>`
+    : `<span class="muted" style="font-weight:500">${esc(textoPlazoInicio())}</span>`;
+  const html = `<div class="dos-col"><div class="col"><div class="card">
       <div class="row between"><div class="grow"><div class="nom-grande">${esc(C.nombreCliente(r))}</div>
         <a href="tel:${esc(tel)}" class="small">📞 ${esc(r.celular)}</a></div>${chipReserva(v)}</div>
       <dl class="kv mt">
         <dt>Vendedora responsable</dt><dd>${esc(r.vendedora)}</dd>
         <dt>Tienda</dt><dd>${esc(r.tienda)}</dd>
         <dt>Fecha de registro</dt><dd>${esc(C.fmtFecha(r.fechaRegistro))}</dd>
-        <dt>Fecha límite</dt><dd>${esc(C.fmtFecha(r.fechaLimite))} <span class="dias ${dcls}">${esc(dt)}</span></dd>
-        <dt>Total</dt><dd>${esc(C.fmtPrecio(total))}</dd>
+        <dt>Fecha límite</dt><dd>${plazoHtml}</dd>
         ${r.observaciones ? `<dt>Observaciones</dt><dd>${esc(r.observaciones)}</dd>` : ''}
       </dl>
     </div>
     <div class="card"><h3>Avance de la separación</h3>${barra(v.prog.pct)}
       <div class="small muted mt">${v.prog.total ? `${v.prog.recibidas + v.prog.entregadas} de ${v.prog.total} prendas ya están en tienda · ${v.prog.entregadas} entregadas` : 'Todas las prendas están canceladas'}</div></div>
-    <h2>Prendas (${v.ps.length})</h2>${items}
     <div class="btns mt"><a class="btn" href="#/editar/${esc(r.id)}">Editar / agregar prendas</a></div>
     <div class="btns mt">
       ${hayCanceladas ? '<button type="button" class="btn sec" data-act="reactivar-reserva">Reactivar prendas canceladas</button>' : ''}
       ${v.estado !== 'cancelada' && v.estado !== 'entregada' ? '<button type="button" class="btn peligro" data-act="cancelar-reserva">Cancelar separación</button>' : ''}
       <button type="button" class="btn peligro" data-act="eliminar-reserva">Eliminar</button>
-    </div>`;
+    </div></div><div class="col"><h2>Prendas (${v.ps.length})</h2>${items}</div></div>`;
   return { titulo: C.nombreCliente(r), html };
 }
 
@@ -587,9 +593,11 @@ function pasosPrenda(p) {
   const base = C.etapa({ ...p, fechaCancelacion: '' });
   const i = IDX[base];
   const F = C.fmtFecha;
+  const lim = C.limitePrenda(p, plazo());
+  const plazoTxt = lim && i === 5 ? `Plazo de separación hasta el ${F(lim)}${p.limiteManual ? ' (extendido)' : ''}` : '';
   if (p.enStock) {
     return [
-      { n: 'Disponible en esta tienda', done: i >= 5, fecha: F(p.fechaRecepcion), d: 'Hay stock, no requiere transferencia' },
+      { n: 'Disponible en esta tienda', done: i >= 5, fecha: F(p.fechaRecepcion), d: plazoTxt || 'Hay stock, no requiere transferencia' },
       { n: 'Entregada al cliente', done: i >= 6, fecha: F(p.fechaEntrega), d: p.entregadoPor ? 'Entregó: ' + p.entregadoPor : '' },
     ];
   }
@@ -604,7 +612,7 @@ function pasosPrenda(p) {
     { n: 'La tienda confirma disponibilidad', done: i >= 2, fecha: F(p.fechaConfirmacion), d: 'Confirmación inicial (verbal)' },
     { n: 'Correo formal de transferencia enviado', done: i >= 3, fecha: F(p.fechaCorreo), d: 'Solo así queda solicitada formalmente' },
     { n: 'En traslado (opcional)', done: i >= 4, fecha: F(p.fechaTraslado), d: '' },
-    { n: 'Recibida en la tienda solicitante', done: i >= 5, fecha: F(p.fechaRecepcion), d: '' },
+    { n: 'Recibida en la tienda solicitante', done: i >= 5, fecha: F(p.fechaRecepcion), d: plazoTxt },
     { n: 'Entregada al cliente', done: i >= 6, fecha: F(p.fechaEntrega), d: p.entregadoPor ? 'Entregó: ' + p.entregadoPor : '' },
   ];
 }
@@ -625,40 +633,64 @@ function campoFecha(etiqueta = 'Fecha') {
   return `<label class="f">${esc(etiqueta)}<input class="in" type="date" id="a-fecha" value="${hoy()}"></label>`;
 }
 
-function correoMailto(p, r) {
-  const asunto = `Solicitud de transferencia – SKU ${p.sku}`;
+function textoCorreo(p, r) {
+  const asunto = `Solicitud de transferencia – código ${p.sku}`;
   const cuerpo = [
-    `Hola, buen día.`,
-    ``,
-    `Les escribimos para solicitar formalmente la transferencia de la siguiente prenda, cuya disponibilidad ya fue confirmada:`,
-    ``,
-    `• SKU: ${p.sku}`,
-    `• Descripción: ${p.descripcion}`,
-    p.talla ? `• Talla: ${p.talla}` : '',
-    p.color ? `• Color: ${p.color}` : '',
+    'Hola, buen día.',
+    '',
+    'Les escribimos para solicitar formalmente la transferencia de la siguiente prenda, cuya disponibilidad ya fue confirmada:',
+    '',
+    `• Código: ${p.sku}`,
+    `• Subclase: ${p.subclase}`,
     `• Tienda de origen: ${p.tiendaOrigen}`,
     `• Tienda que solicita: ${p.tiendaSolicitante || r.tienda}`,
-    `• Fecha límite de separación del cliente: ${C.fmtFecha(r.fechaLimite)}`,
-    ``,
-    `Quedamos atentos a su confirmación del envío. Gracias.`,
-  ]
-    .filter((x, i, a) => x !== '' || a[i - 1] !== '')
-    .join('\r\n');
+    '',
+    'Quedamos atentos a su confirmación del envío. Gracias.',
+  ].join('\r\n');
+  return { asunto, cuerpo };
+}
+
+function correoMailto(p, r) {
+  const { asunto, cuerpo } = textoCorreo(p, r);
   return `mailto:?subject=${encodeURIComponent(asunto)}&body=${encodeURIComponent(cuerpo)}`;
 }
 
-function panelAccion(p, r, estado) {
-  const e = C.etapa(p);
-  const vencida = estado === 'vencida';
-  let aviso = '';
-  if (vencida) {
-    aviso = `<div class="aviso mal">La fecha límite (${esc(C.fmtFecha(r.fechaLimite))}) ya pasó. Extiende la fecha en “Editar separación” o cancela la prenda.</div>`;
+async function copiarCorreo() {
+  const p = S.prendas.find((x) => x.id === ruta().arg);
+  const r = p && S.reservas.find((x) => x.id === p.reservaId);
+  if (!p || !r) return;
+  const { asunto, cuerpo } = textoCorreo(p, r);
+  try {
+    await navigator.clipboard.writeText(`Asunto: ${asunto}\n\n${cuerpo.replace(/\r\n/g, '\n')}`);
+    toast('Texto del correo copiado. Pégalo en tu correo.');
+  } catch (_) {
+    toast('No se pudo copiar. Usa “Redactar correo”.', true);
   }
+}
+
+function cardPlazo(p) {
+  const lim = C.limitePrenda(p, plazo());
+  const ext = !!p.limiteManual;
+  const vencido = hoy() > lim;
+  return `<div class="card"><h3>Plazo de separación</h3>
+    <div class="aviso ${vencido ? 'mal' : 'info'}" style="cursor:default">${
+      vencido
+        ? `El plazo terminó el <b>${esc(C.fmtFecha(lim))}</b>. Extiéndelo si el cliente avisó que vendrá más tarde, o cancela la prenda.`
+        : `Tiene hasta el <b>${esc(C.fmtFecha(lim))}</b>`
+    }${ext ? ` (plazo extendido${p.motivoLimite ? ': ' + esc(p.motivoLimite) : ''})` : ` · ${plazo()} días desde que llegó el ${esc(C.fmtFecha(p.fechaRecepcion))}`}.</div>
+    <label class="f">Extender hasta<input class="in" type="date" id="a-limite" value="${esc(lim > hoy() ? lim : hoy())}" min="${esc(p.fechaRecepcion)}"></label>
+    <label class="f">Motivo (ej.: el cliente está de viaje)<input class="in" id="a-motivo" value="${esc(p.motivoLimite)}" autocomplete="off"></label>
+    <div class="btns"><button type="button" class="btn sec" data-act="p-extender">Extender plazo</button>
+    ${ext ? '<button type="button" class="btn peligro" data-act="p-plazonormal">Volver al plazo normal</button>' : ''}</div></div>`;
+}
+
+function panelAccion(p, r) {
+  const e = C.etapa(p);
   switch (e) {
     case 'pendiente': {
       const nota = C.notaConsultaNegativa(p);
-      return `${aviso}<div class="accion"><h3>1 · Conseguir la prenda</h3>
-        ${nota ? `<div class="aviso warn">${esc(nota)}</div>` : '<p class="small muted" style="margin-top:0">Consulta a otra tienda si tiene la prenda y registra la consulta.</p>'}
+      return `<div class="accion"><h3>1 · Conseguir la prenda</h3>
+        ${nota ? `<div class="aviso warn" style="cursor:default">${esc(nota)}</div>` : '<p class="small muted" style="margin-top:0">Primero consulta a una tienda si tiene la prenda. Cuando confirme, se envía el correo.</p>'}
         <label class="f">Tienda de origen a la que consultas<input class="in" id="a-origen" list="dl-tienda" autocomplete="off" placeholder="Ej.: Jockey Plaza" autocapitalize="words"></label>
         ${campoFecha('Fecha de la consulta')}
         <label class="f">Observaciones sobre la solicitud<textarea class="in" id="a-obs" rows="2">${esc(p.obsSolicitud)}</textarea></label>
@@ -666,38 +698,39 @@ function panelAccion(p, r, estado) {
         <button type="button" class="btn sec block mt" data-act="p-stock">Ya hay stock en esta tienda</button></div>${datalist('dl-tienda', listaTiendas())}`;
     }
     case 'consulta':
-      return `${aviso}<div class="accion"><h3>2 · ¿Qué respondió ${esc(p.tiendaOrigen)}?</h3>
+      return `<div class="accion"><h3>2 · ¿Qué respondió ${esc(p.tiendaOrigen)}?</h3>
         <p class="small muted" style="margin-top:0">Consultada el ${esc(C.fmtFecha(p.fechaConsulta))}. Registra la respuesta de la tienda.</p>
         ${campoFecha('Fecha de la respuesta')}
         <div class="btns"><button type="button" class="btn verde" data-act="p-resp-si">Sí, tiene disponibilidad</button>
         <button type="button" class="btn peligro" data-act="p-resp-no">No tiene la prenda</button></div></div>`;
     case 'disponible':
-      return `${aviso}<div class="accion"><h3>3 · Enviar el correo formal</h3>
-        <div class="aviso warn"><b>${esc(p.tiendaOrigen)}</b> confirmó disponibilidad el ${esc(C.fmtFecha(p.fechaConfirmacion))}, pero la transferencia <b>aún NO está solicitada formalmente</b>. Envía el correo y registra la fecha.</div>
-        <a class="btn sec block mb" href="${correoMailto(p, r)}">Redactar correo</a>
+      return `<div class="accion"><h3>3 · Enviar el correo formal</h3>
+        <div class="aviso warn" style="cursor:default"><b>${esc(p.tiendaOrigen)}</b> confirmó disponibilidad el ${esc(C.fmtFecha(p.fechaConfirmacion))}, pero la transferencia <b>aún NO está solicitada formalmente</b>. Envía el correo y registra la fecha.</div>
+        <div class="btns mb"><a class="btn sec" href="${correoMailto(p, r)}">Redactar correo</a>
+        <button type="button" class="btn sec" data-act="copiar-correo">Copiar texto del correo</button></div>
         ${campoFecha('Fecha en que se envió el correo')}
         <button type="button" class="btn block" data-act="p-correo">Registrar correo enviado</button></div>`;
     case 'correo':
-      return `${aviso}<div class="accion"><h3>4 · Seguimiento hasta recibir la prenda</h3>
-        <p class="small muted" style="margin-top:0">Correo enviado el ${esc(C.fmtFecha(p.fechaCorreo))} a ${esc(p.tiendaOrigen)}.</p>
+      return `<div class="accion"><h3>4 · Seguimiento hasta recibir la prenda</h3>
+        <p class="small muted" style="margin-top:0">Correo enviado el ${esc(C.fmtFecha(p.fechaCorreo))} a ${esc(p.tiendaOrigen)}. Al recibirla en tienda empiezan a correr los ${plazo()} días de plazo.</p>
         ${campoFecha()}
         <div class="btns"><button type="button" class="btn sec" data-act="p-traslado">Marcar en traslado</button>
         <button type="button" class="btn verde" data-act="p-recibir">Recibida en tienda</button></div></div>`;
     case 'traslado':
-      return `${aviso}<div class="accion"><h3>5 · Recepción en tienda</h3>
-        <p class="small muted" style="margin-top:0">En traslado desde el ${esc(C.fmtFecha(p.fechaTraslado))}.</p>
+      return `<div class="accion"><h3>5 · Recepción en tienda</h3>
+        <p class="small muted" style="margin-top:0">En traslado desde el ${esc(C.fmtFecha(p.fechaTraslado))}. Al recibirla empiezan a correr los ${plazo()} días de plazo.</p>
         ${campoFecha('Fecha de recepción')}
         <button type="button" class="btn verde block" data-act="p-recibir">Registrar recepción en tienda</button></div>`;
     case 'recibida':
-      return `${aviso}<div class="accion"><h3>${p.enStock ? '2' : '6'} · Entrega al cliente</h3>
+      return `<div class="accion"><h3>${p.enStock ? '2' : '6'} · Entrega al cliente</h3>
         <p class="small muted" style="margin-top:0">${p.enStock ? 'La prenda está en esta tienda.' : 'Recibida el ' + esc(C.fmtFecha(p.fechaRecepcion)) + '.'} Avisa al cliente y registra la entrega.</p>
         ${campoFecha('Fecha de entrega')}
         <label class="f">¿Quién entrega? (opcional)<input class="in" id="a-por" list="dl-vend" autocomplete="off"></label>
-        <button type="button" class="btn verde block" data-act="p-entregar">Registrar entrega al cliente</button></div>${datalist('dl-vend', listaVendedoras())}`;
+        <button type="button" class="btn verde block" data-act="p-entregar">Registrar entrega al cliente</button></div>${datalist('dl-vend', listaVendedoras())}${cardPlazo(p)}`;
     case 'entregada':
-      return `<div class="aviso ok">Entregada al cliente el <b>${esc(C.fmtFecha(p.fechaEntrega))}</b>${p.entregadoPor ? ' por ' + esc(p.entregadoPor) : ''}. La vendedora responsable de la separación sigue siendo <b>${esc(r.vendedora)}</b>.</div>`;
+      return `<div class="aviso ok" style="cursor:default">Entregada al cliente el <b>${esc(C.fmtFecha(p.fechaEntrega))}</b>${p.entregadoPor ? ' por ' + esc(p.entregadoPor) : ''}. La vendedora responsable de la separación sigue siendo <b>${esc(r.vendedora)}</b>.</div>`;
     case 'cancelada':
-      return `<div class="aviso mal">Prenda cancelada el ${esc(C.fmtFecha(p.fechaCancelacion))}.</div>
+      return `<div class="aviso mal" style="cursor:default">Prenda cancelada el ${esc(C.fmtFecha(p.fechaCancelacion))}.</div>
         <button type="button" class="btn sec block mb" data-act="p-reactivar">Reactivar prenda</button>`;
     default:
       return '';
@@ -712,24 +745,22 @@ function vistaPrenda(id) {
   const r = v.r;
   const estado = v.est[v.ps.findIndex((x) => x.id === p.id)];
   const e = C.etapa(p);
-  const detalle = [p.subclase, p.talla && 'Talla ' + p.talla, p.color, C.fmtPrecio(p.precio)].filter(Boolean).join(' · ');
   let puedeRetroceder = true;
   try {
     C.aplicarAccion(p, 'retroceder');
   } catch (_) {
     puedeRetroceder = false;
   }
-  const html = `<div class="card">
-      <div class="row between"><div class="grow"><div class="nom-grande">${esc(p.sku)}</div><div>${esc(p.descripcion)}</div>
-        <div class="small muted">${esc(detalle)}</div></div>${chip(estado)}</div>
+  const html = `<div class="dos-col"><div class="col"><div class="card">
+      <div class="row between"><div class="grow"><div class="nom-grande">${esc(p.sku)}</div><div>${esc(p.subclase)}</div></div>${chip(estado)}</div>
       ${p.obs ? `<div class="small mt"><b>Obs.:</b> ${esc(p.obs)}</div>` : ''}
       <hr class="sep">
       <a href="#/reserva/${esc(r.id)}" class="row between" style="text-decoration:none;color:inherit">
         <div><div style="font-weight:700">${esc(C.nombreCliente(r))}</div>
-        <div class="small muted">Vendedora: ${esc(r.vendedora)} · ${esc(r.tienda)} · límite ${esc(C.fmtFecha(r.fechaLimite))}</div></div><span>›</span></a>
+        <div class="small muted">Vendedora: ${esc(r.vendedora)} · ${esc(r.tienda)}</div></div><span>›</span></a>
     </div>
-    ${panelAccion(p, r, estado)}
-    <div class="card"><h3>Seguimiento</h3>${htmlPasos(p, e === 'cancelada')}</div>
+    ${panelAccion(p, r)}
+    </div><div class="col"><div class="card"><h3>Seguimiento</h3>${htmlPasos(p, e === 'cancelada')}</div>
     ${
       e !== 'entregada' && e !== 'cancelada' && e !== 'pendiente'
         ? `<div class="card"><label class="f" style="margin:0">Observaciones sobre la solicitud<textarea class="in" id="obs-sol" rows="2">${esc(p.obsSolicitud)}</textarea></label>
@@ -741,7 +772,7 @@ function vistaPrenda(id) {
     <div class="btns">
       ${puedeRetroceder ? '<button type="button" class="btn sec" data-act="p-retroceder">Deshacer último paso</button>' : ''}
       ${e !== 'entregada' && e !== 'cancelada' ? '<button type="button" class="btn peligro" data-act="p-cancelar">Cancelar prenda</button>' : ''}
-    </div>`;
+    </div></div></div>`;
   return { titulo: p.sku, html };
 }
 
@@ -753,10 +784,11 @@ async function accionPrenda(tipo) {
     return el ? el.value : undefined;
   };
   const datos = {
-    fecha: val('#a-fecha') || hoy(),
+    fecha: (tipo === 'extender' ? val('#a-limite') : val('#a-fecha')) || (tipo === 'extender' ? '' : hoy()),
     tiendaOrigen: val('#a-origen'),
     obs: tipo === 'observaciones' ? val('#obs-sol') : val('#a-obs'),
     entregadoPor: val('#a-por'),
+    motivo: val('#a-motivo'),
   };
   const [tipoReal, resultado] = tipo === 'resp-si' ? ['respuesta', 'disponible'] : tipo === 'resp-no' ? ['respuesta', 'no_disponible'] : [tipo, undefined];
   if (resultado) datos.resultado = resultado;
@@ -775,7 +807,15 @@ async function accionPrenda(tipo) {
   }
   S.prendas = S.prendas.map((x) => (x.id === nueva.id ? nueva : x));
   render(false);
-  toast(tipo === 'resp-no' ? 'Registrado: la tienda no tiene la prenda. Consulta a otra tienda.' : 'Guardado');
+  toast(
+    tipo === 'resp-no'
+      ? 'Registrado: la tienda no tiene la prenda. Consulta a otra tienda.'
+      : tipo === 'extender'
+        ? 'Plazo extendido'
+        : tipo === 'recibir' || tipo === 'stock'
+          ? `Guardado. El plazo de ${plazo()} días empieza hoy.`
+          : 'Guardado',
+  );
 }
 
 /* ───────────── Vendedoras ───────────── */
@@ -787,6 +827,7 @@ function vistaVendedoras() {
   }
   const html =
     '<p class="saludo">La vendedora responsable queda asociada a cada separación durante todo el proceso.</p>' +
+    '<div class="cards-grid">' +
     lista
       .map((x) => {
         const a = (estado, n, etq) =>
@@ -796,13 +837,14 @@ function vistaVendedoras() {
           <button type="button" class="btn sec peq" data-act="ir-filtro" data-vendedora="${esc(x.nombre)}">Ver todas</button></div>
           <div class="stats5">${a('activa', x.pendientes, 'Pendientes')}${a('entregada', x.entregadas, 'Entregadas')}${a('cancelada', x.canceladas, 'Canceladas')}${a('vencida', x.vencidas, 'Vencidas')}</div></div>`;
       })
-      .join('');
+      .join('') +
+    '</div>';
   return { titulo: 'Vendedoras', html };
 }
 
 /* ───────────── Reportes y exportación ───────────── */
 
-const LIMITE_PANTALLA = 150;
+const LIMITE_PANTALLA = 200;
 
 function datosReporte() {
   return C.generarReporte(S.reporte.id, vistas(), S.reporte);
@@ -812,26 +854,31 @@ function htmlResultadoReporte() {
   const rep = datosReporte();
   const n = rep.filas.length;
   const cols = rep.columnas;
-  const tarjetas = rep.filas
-    .slice(0, LIMITE_PANTALLA)
+  const filas = rep.filas.slice(0, LIMITE_PANTALLA);
+  const tarjetas = filas
     .map((fila) => {
       const kv = cols
-        .map((c, i) => (i > 0 && c.pantalla && fila[i] !== '' && fila[i] !== null && fila[i] !== undefined ? `<span>${esc(c.h)}</span><span>${esc(c.money ? C.fmtPrecio(fila[i]) : fila[i])}</span>` : ''))
+        .map((c, i) => (i > 0 && c.pantalla && fila[i] !== '' && fila[i] !== null && fila[i] !== undefined ? `<span>${esc(c.h)}</span><span>${esc(fila[i])}</span>` : ''))
         .join('');
       return `<div class="rep-card"><div class="tt">${esc(fila[0])}</div><div class="kvs">${kv}</div></div>`;
     })
     .join('');
+  const tabla = `<div class="tabla-wrap"><table class="tabla"><thead><tr>${cols.map((c) => `<th>${esc(c.h)}</th>`).join('')}</tr></thead><tbody>${filas
+    .map((f) => `<tr>${f.map((x) => `<td>${esc(x)}</td>`).join('')}</tr>`)
+    .join('')}</tbody></table></div>`;
   const nota = n > LIMITE_PANTALLA ? `<p class="small muted">Se muestran ${LIMITE_PANTALLA} de ${n}. El archivo de Excel incluye todos.</p>` : '';
   return {
     cont: `${n} ${n === 1 ? 'resultado' : 'resultados'}`,
-    html: n ? `<div class="card" style="padding-top:4px;padding-bottom:4px">${tarjetas}</div>${nota}` : '<div class="vacio"><b>Sin resultados</b>No hay datos para este reporte con los filtros elegidos.</div>',
+    html: n
+      ? `<div class="card rep-cards" style="padding-top:4px;padding-bottom:4px">${tarjetas}</div><div class="rep-tabla">${tabla}</div>${nota}`
+      : '<div class="vacio"><b>Sin resultados</b>No hay datos para este reporte con los filtros elegidos.</div>',
   };
 }
 
 function vistaReportes() {
   const rp = S.reporte;
   const res = htmlResultadoReporte();
-  const html = `<div class="card">
+  const html = `<div class="card limitado">
       <label class="f">Reporte<select class="in" data-rep="id">${REPORTES.map((x) => `<option value="${x.id}"${rp.id === x.id ? ' selected' : ''}>${esc(x.titulo)}</option>`).join('')}</select></label>
       <div class="g2">
         <label class="f">Registradas desde<input class="in" type="date" data-rep="desde" value="${esc(rp.desde)}"></label>
@@ -868,7 +915,7 @@ function exportarReporte() {
     const rep = datosReporte();
     const bytes = crearXlsx([{ nombre: rep.titulo, columnas: rep.columnas, filas: rep.filas }]);
     descargar(bytes, `Separaciones_${rep.id}_${hoy()}.xlsx`);
-    toast('Excel generado. Búscalo en Descargas.');
+    toast('Excel generado. Revisa tu carpeta de Descargas.');
   } catch (e) {
     toast('No se pudo exportar: ' + e.message, true);
   }
@@ -878,7 +925,7 @@ function exportarTodo() {
   try {
     const bytes = crearXlsx(C.hojasCompletas(vistas(), S.config.vendedoras));
     descargar(bytes, `Separaciones_completo_${hoy()}.xlsx`);
-    toast('Excel generado. Búscalo en Descargas.');
+    toast('Excel generado. Revisa tu carpeta de Descargas.');
   } catch (e) {
     toast('No se pudo exportar: ' + e.message, true);
   }
@@ -888,19 +935,19 @@ function exportarTodo() {
 
 function vistaAjustes() {
   const c = S.config;
-  const html = `<div class="card">
+  const html = `<div class="estrecho"><div class="card">
       <h3>Esta tienda</h3>
       <label class="f">Tienda donde se usa esta aplicación<input class="in" id="aj-tienda" value="${esc(c.tiendaActual)}" autocomplete="off" placeholder="Ej.: Miraflores"></label>
       <div class="g2">
-        <label class="f">Plazo normal de separación (días)<input class="in" id="aj-plazo" type="number" inputmode="numeric" min="1" max="365" value="${esc(c.diasSeparacion)}"></label>
+        <label class="f">Plazo de separación (días desde que llega a tienda)<input class="in" id="aj-plazo" type="number" inputmode="numeric" min="1" max="60" value="${esc(c.diasSeparacion)}"></label>
         <label class="f">Avisar “por vencer” (días antes)<input class="in" id="aj-aviso" type="number" inputmode="numeric" min="0" max="30" value="${esc(c.diasAviso)}"></label>
       </div>
     </div>
     <div class="card">
       <h3>Listas de ayuda</h3>
       <label class="f">Vendedoras (una por línea)<textarea class="in" id="aj-vend" rows="4">${esc(listaVendedoras().join('\n'))}</textarea></label>
-      <label class="f">Tiendas (una por línea)<textarea class="in" id="aj-tiendas" rows="4">${esc(unicos([c.tiendaActual, ...c.tiendas, ...S.reservas.map((r) => r.tienda), ...S.prendas.map((p) => p.tiendaOrigen)]).join('\n'))}</textarea></label>
-      <p class="small muted" style="margin-top:0">Estas listas solo sugieren nombres al escribir; siempre puedes escribir uno nuevo.</p>
+      <label class="f">Tiendas (una por línea)<textarea class="in" id="aj-tiendas" rows="4">${esc(listaTiendas().join('\n'))}</textarea></label>
+      <p class="small muted" style="margin-top:0">Para agregar otra vendedora, escribe su nombre en una línea nueva y guarda.</p>
     </div>
     <button type="button" class="btn block mb" data-act="guardar-ajustes">Guardar ajustes</button>
     ${S.instalar ? '<button type="button" class="btn sec block mb" data-act="instalar">Instalar aplicación en este dispositivo</button>' : ''}
@@ -908,7 +955,7 @@ function vistaAjustes() {
       <h3>Datos</h3>
       <p class="small muted" style="margin-top:0">Todo se guarda solo en este dispositivo (${S.reservas.length} separaciones, ${S.prendas.length} prendas). No se envía nada a Internet. Si borras los datos del navegador o desinstalas la aplicación, se pierden.</p>
       <button type="button" class="btn peligro block" data-act="borrar-todo">Borrar todos los datos</button>
-    </div>`;
+    </div></div>`;
   return { titulo: 'Ajustes', html };
 }
 
@@ -916,7 +963,7 @@ async function guardarAjustes() {
   const c = S.config;
   const lineas = (id) => unicos($(id).value.split('\n'));
   c.tiendaActual = $('#aj-tienda').value.trim();
-  c.diasSeparacion = Math.min(365, Math.max(1, parseInt($('#aj-plazo').value, 10) || 7));
+  c.diasSeparacion = Math.min(60, Math.max(1, parseInt($('#aj-plazo').value, 10) || C.DIAS_PLAZO));
   c.diasAviso = Math.min(30, Math.max(0, parseInt($('#aj-aviso').value, 10) || 0));
   c.vendedoras = lineas('#aj-vend');
   c.tiendas = lineas('#aj-tiendas');
@@ -1013,6 +1060,9 @@ const ACCIONES = {
   'p-entregar': () => accionPrenda('entregar'),
   'p-obs': () => accionPrenda('observaciones'),
   'p-reactivar': () => accionPrenda('reactivar'),
+  'copiar-correo': copiarCorreo,
+  'p-extender': () => accionPrenda('extender'),
+  'p-plazonormal': () => accionPrenda('plazonormal'),
   'p-cancelar': async () => {
     if (await confirmar('Cancelar prenda', 'La prenda quedará como cancelada. Podrás reactivarla después.', 'Cancelar prenda', true)) accionPrenda('cancelar');
   },
@@ -1060,6 +1110,12 @@ document.addEventListener('change', (e) => {
   } else if (t.dataset.rep) {
     S.reporte[t.dataset.rep] = t.value;
     refrescarReporte();
+  } else if (t.name === 'vendedoraSel') {
+    const w = $('#wrap-otra');
+    if (w) {
+      w.hidden = t.value !== '__otra';
+      if (!w.hidden) $('input', w).focus();
+    }
   }
 });
 
@@ -1088,7 +1144,22 @@ async function iniciar() {
     const d = await DB.cargarTodo();
     S.reservas = d.reservas;
     S.prendas = d.prendas;
-    if (d.config) S.config = { ...S.config, ...d.config };
+    if (d.config) {
+      if (d.config.version === VERSION_CONFIG) {
+        S.config = { ...S.config, ...d.config };
+      } else {
+        // Ajustes guardados con una versión anterior: pasan al plazo de 3 días y a las vendedoras actuales
+        S.config = {
+          ...S.config,
+          ...d.config,
+          version: VERSION_CONFIG,
+          diasSeparacion: C.DIAS_PLAZO,
+          diasAviso: 1,
+          vendedoras: unicos([...VENDEDORAS_INICIALES, ...(d.config.vendedoras || [])]),
+        };
+        await guardarConfig();
+      }
+    }
     DB.pedirPersistencia();
   } catch (e) {
     console.error(e);

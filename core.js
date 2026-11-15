@@ -1,5 +1,5 @@
 // Lógica de negocio pura (sin DOM, sin base de datos): estados, flujo de
-// transferencias, filtros, resumen y reportes.
+// transferencias, plazos, filtros, resumen y reportes.
 
 /* ───────────── Catálogo de estados ───────────── */
 
@@ -23,6 +23,9 @@ export const ESTADOS_RESERVA = {
   cancelada: 'Cancelada',
   vencida: 'Vencida',
 };
+
+/** Días de plazo, contados desde que la prenda llega a la tienda. */
+export const DIAS_PLAZO = 3;
 
 /* ───────────── Utilidades ───────────── */
 
@@ -64,12 +67,6 @@ export const norm = (s) =>
 
 export const soloDigitos = (s) => String(s ?? '').replace(/\D/g, '');
 
-export function fmtPrecio(n) {
-  const v = Number(n);
-  if (!Number.isFinite(v)) return '';
-  return 'S/ ' + v.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-}
-
 export const nombreCliente = (r) => `${r.nombre || ''} ${r.apellido || ''}`.trim();
 
 /* ───────────── Fábricas ───────────── */
@@ -83,7 +80,6 @@ export function nuevaReserva(config = {}, hoy = hoyISO()) {
     vendedora: '',
     tienda: config.tiendaActual || '',
     fechaRegistro: hoy,
-    fechaLimite: sumarDias(hoy, config.diasSeparacion ?? 7),
     observaciones: '',
     creada: Date.now(),
   };
@@ -95,11 +91,7 @@ export function nuevaPrenda(reservaId, tiendaSolicitante = '', orden = 0) {
     reservaId,
     orden,
     sku: '',
-    descripcion: '',
     subclase: '',
-    talla: '',
-    color: '',
-    precio: '',
     obs: '',
     tiendaSolicitante,
     enStock: false,
@@ -112,10 +104,24 @@ export function nuevaPrenda(reservaId, tiendaSolicitante = '', orden = 0) {
     obsSolicitud: '',
     fechaTraslado: '',
     fechaRecepcion: '',
+    limiteManual: '', // plazo extendido a mano (ej.: el cliente viaja)
+    motivoLimite: '',
     fechaEntrega: '',
     entregadoPor: '',
     fechaCancelacion: '',
   };
+}
+
+/* ───────────── Plazo de separación ───────────── */
+
+/**
+ * Fecha límite de una prenda: 3 días desde que llegó a la tienda (o la fecha
+ * extendida a mano). Antes de llegar a la tienda no hay plazo corriendo.
+ */
+export function limitePrenda(p, plazo = DIAS_PLAZO) {
+  if (!p.fechaRecepcion) return '';
+  if (p.limiteManual) return p.limiteManual;
+  return sumarDias(p.fechaRecepcion, plazo);
 }
 
 /* ───────────── Estados de una prenda ───────────── */
@@ -134,19 +140,20 @@ export function etapa(p) {
   return 'pendiente';
 }
 
-/** Estado visible: la etapa, salvo que la reserva esté vencida. */
-export function estadoPrenda(p, reserva, hoy) {
+/** Estado visible: la etapa, salvo que el plazo desde la recepción ya haya pasado. */
+export function estadoPrenda(p, hoy, plazo = DIAS_PLAZO) {
   const e = etapa(p);
   if (e === 'cancelada' || e === 'entregada') return e;
-  if (reserva && hoy > reserva.fechaLimite) return 'vencida';
+  const lim = limitePrenda(p, plazo);
+  if (lim && hoy > lim) return 'vencida';
   return e;
 }
 
-export function estadoReserva(r, prendas, hoy) {
+export function estadoReserva(prendas, hoy, plazo = DIAS_PLAZO) {
   const vivas = prendas.filter((p) => !p.fechaCancelacion);
   if (prendas.length && !vivas.length) return 'cancelada';
   if (vivas.length && vivas.every((p) => p.fechaEntrega)) return 'entregada';
-  if (hoy > r.fechaLimite) return 'vencida';
+  if (vivas.some((p) => estadoPrenda(p, hoy, plazo) === 'vencida')) return 'vencida';
   return 'activa';
 }
 
@@ -189,7 +196,7 @@ function noAntes(f, min, texto) {
  * Aplica un paso del flujo y devuelve una copia nueva de la prenda.
  * Lanza Error (en español) si el paso no es válido en el estado actual.
  * Pasos: consultar, respuesta, correo, traslado, recibir, entregar, stock,
- *        cancelar, reactivar, retroceder, observaciones.
+ *        extender, plazonormal, cancelar, reactivar, retroceder, observaciones.
  */
 export function aplicarAccion(p, tipo, d = {}) {
   const et = etapa(p);
@@ -247,6 +254,8 @@ export function aplicarAccion(p, tipo, d = {}) {
       exigeFecha(d.fecha);
       noAntes(d.fecha, p.fechaTraslado || p.fechaCorreo, p.fechaTraslado ? 'el traslado' : 'el envío del correo');
       q.fechaRecepcion = d.fecha;
+      q.limiteManual = '';
+      q.motivoLimite = '';
       return q;
     }
     case 'stock': {
@@ -255,6 +264,24 @@ export function aplicarAccion(p, tipo, d = {}) {
       q.enStock = true;
       q.tiendaOrigen = '';
       q.fechaRecepcion = d.fecha;
+      q.limiteManual = '';
+      q.motivoLimite = '';
+      return q;
+    }
+    case 'extender': {
+      if (et !== 'recibida') {
+        throw new Error('El plazo corre desde que la prenda llega a la tienda; solo se extiende cuando ya está recibida.');
+      }
+      if (!d.fecha) throw new Error('Indica hasta qué fecha extiendes el plazo.');
+      noAntes(d.fecha, p.fechaRecepcion, 'la recepción');
+      q.limiteManual = d.fecha;
+      q.motivoLimite = (d.motivo || '').trim();
+      return q;
+    }
+    case 'plazonormal': {
+      if (et !== 'recibida' || !p.limiteManual) throw new Error('El plazo ya es el normal.');
+      q.limiteManual = '';
+      q.motivoLimite = '';
       return q;
     }
     case 'entregar': {
@@ -290,6 +317,8 @@ export function aplicarAccion(p, tipo, d = {}) {
         case 'recibida':
           q.fechaRecepcion = '';
           q.enStock = false;
+          q.limiteManual = '';
+          q.motivoLimite = '';
           return q;
         case 'traslado':
           q.fechaTraslado = '';
@@ -332,24 +361,18 @@ export function validarReserva(r, prendas) {
   if (!r.vendedora.trim()) e.push('Indica la vendedora responsable.');
   if (!r.tienda.trim()) e.push('Indica la tienda donde se hizo la separación.');
   if (!r.fechaRegistro) e.push('Falta la fecha de registro.');
-  if (!r.fechaLimite) e.push('Falta la fecha límite de separación.');
-  else if (r.fechaRegistro && r.fechaLimite < r.fechaRegistro) {
-    e.push('La fecha límite no puede ser anterior a la fecha de registro.');
-  }
   if (!prendas.length) e.push('Agrega al menos una prenda.');
   prendas.forEach((p, i) => {
     const n = prendas.length > 1 ? ` (prenda ${i + 1})` : '';
-    if (!p.sku.trim()) e.push(`Falta el código o SKU${n}.`);
-    if (!p.descripcion.trim()) e.push(`Falta la descripción${n}.`);
-    const precio = String(p.precio).trim();
-    if (precio === '' || !Number.isFinite(Number(precio)) || Number(precio) < 0) e.push(`El precio no es válido${n}.`);
+    if (!p.sku.trim()) e.push(`Falta el código de la prenda${n}.`);
+    if (!p.subclase.trim()) e.push(`Falta la subclase${n}.`);
   });
   return e;
 }
 
 /* ───────────── Vistas, filtros y resumen ───────────── */
 
-export function enriquecer(data, hoy, aviso = 2) {
+export function enriquecer(data, hoy, aviso = 1, plazo = DIAS_PLAZO) {
   const por = new Map();
   for (const p of data.prendas) {
     if (!por.has(p.reservaId)) por.set(p.reservaId, []);
@@ -357,15 +380,24 @@ export function enriquecer(data, hoy, aviso = 2) {
   }
   return data.reservas.map((r) => {
     const ps = (por.get(r.id) || []).slice().sort((a, b) => (a.orden ?? 0) - (b.orden ?? 0));
-    const estado = estadoReserva(r, ps, hoy);
-    const dias = diasEntre(hoy, r.fechaLimite);
+    const estado = estadoReserva(ps, hoy, plazo);
+    const lims = ps.map((p) => limitePrenda(p, plazo));
+    // Fecha límite más próxima entre las prendas vivas, recibidas y aún no entregadas
+    const pend = ps
+      .map((p, i) => (!p.fechaCancelacion && !p.fechaEntrega ? lims[i] : ''))
+      .filter(Boolean)
+      .sort();
+    const limite = pend[0] || '';
+    const dias = limite ? diasEntre(hoy, limite) : null;
     return {
       r,
       ps,
       estado,
+      limite,
       dias,
-      porVencer: estado === 'activa' && dias >= 0 && dias <= aviso,
-      est: ps.map((p) => estadoPrenda(p, r, hoy)),
+      porVencer: estado === 'activa' && dias !== null && dias >= 0 && dias <= aviso,
+      est: ps.map((p) => estadoPrenda(p, hoy, plazo)),
+      lims,
       prog: progreso(ps),
     };
   });
@@ -398,7 +430,7 @@ export function filtrar(vistas, f = {}) {
           r.celular,
           r.vendedora,
           r.tienda,
-          ...v.ps.flatMap((p) => [p.sku, p.descripcion, p.subclase, p.tiendaOrigen, p.tiendaSolicitante]),
+          ...v.ps.flatMap((p) => [p.sku, p.subclase, p.tiendaOrigen, p.tiendaSolicitante]),
         ].join(' '),
       );
       const okTexto = blob.includes(q);
@@ -409,16 +441,17 @@ export function filtrar(vistas, f = {}) {
   });
 }
 
-const ORDEN_RESERVA = { vencida: 0, activa: 1, entregada: 2, cancelada: 3 };
-
 export function ordenarVistas(vistas) {
+  const grupo = (v) => (v.estado === 'vencida' ? 0 : v.estado === 'activa' ? 1 : 2);
   return vistas.slice().sort((a, b) => {
-    const ga = a.estado === 'vencida' || a.estado === 'activa' ? 0 : 1;
-    const gb = b.estado === 'vencida' || b.estado === 'activa' ? 0 : 1;
+    const ga = grupo(a);
+    const gb = grupo(b);
     if (ga !== gb) return ga - gb;
-    if (ga === 0) {
-      if (a.r.fechaLimite !== b.r.fechaLimite) return a.r.fechaLimite < b.r.fechaLimite ? -1 : 1;
-      return ORDEN_RESERVA[a.estado] - ORDEN_RESERVA[b.estado];
+    if (ga < 2) {
+      const la = a.limite || '9999-12-31';
+      const lb = b.limite || '9999-12-31';
+      if (la !== lb) return la < lb ? -1 : 1;
+      return a.r.fechaRegistro < b.r.fechaRegistro ? -1 : a.r.fechaRegistro > b.r.fechaRegistro ? 1 : 0;
     }
     return a.r.fechaRegistro < b.r.fechaRegistro ? 1 : a.r.fechaRegistro > b.r.fechaRegistro ? -1 : 0;
   });
@@ -488,10 +521,9 @@ export const COLS_RESERVA = [
   { h: 'Vendedora', w: 16, pantalla: true },
   { h: 'Tienda', w: 16, pantalla: true },
   { h: 'Fecha de registro', w: 14, pantalla: true },
-  { h: 'Fecha límite', w: 14, pantalla: true },
+  { h: 'Fecha límite (más próxima)', w: 16, pantalla: true },
   { h: 'N.º de prendas', w: 12, pantalla: true },
   { h: 'Prendas entregadas', w: 12 },
-  { h: 'Total (S/)', w: 12, money: true },
   { h: 'Estado', w: 14, pantalla: true },
   { h: 'Observaciones', w: 34 },
 ];
@@ -500,12 +532,8 @@ export const COLS_PRENDA = [
   { h: 'Cliente', w: 26 },
   { h: 'Celular', w: 14 },
   { h: 'Vendedora', w: 16, pantalla: true },
-  { h: 'Código / SKU', w: 14, pantalla: true },
-  { h: 'Descripción', w: 30, pantalla: true },
-  { h: 'Subclase', w: 14 },
-  { h: 'Talla', w: 8 },
-  { h: 'Color', w: 12 },
-  { h: 'Precio (S/)', w: 12, money: true },
+  { h: 'Código de la prenda', w: 16, pantalla: true },
+  { h: 'Subclase', w: 16, pantalla: true },
   { h: 'Tienda solicitante', w: 18 },
   { h: 'Tienda de origen', w: 18, pantalla: true },
   { h: 'Estado', w: 24, pantalla: true },
@@ -516,9 +544,10 @@ export const COLS_PRENDA = [
   { h: 'Fecha del correo', w: 14, pantalla: true },
   { h: 'Fecha de traslado', w: 14 },
   { h: 'Fecha de recepción', w: 14, pantalla: true },
+  { h: 'Fecha límite', w: 14, pantalla: true },
   { h: 'Fecha de entrega', w: 14 },
-  { h: 'Fecha límite', w: 14 },
   { h: 'Observaciones de la solicitud', w: 34 },
+  { h: 'Observaciones de la prenda', w: 28 },
 ];
 
 export const COLS_VENDEDORA = [
@@ -534,17 +563,15 @@ const RESULTADO = { disponible: 'Tiene disponibilidad', no_disponible: 'No tiene
 
 export function filaReserva(v) {
   const r = v.r;
-  const total = v.ps.filter((p) => !p.fechaCancelacion).reduce((s, p) => s + (Number(p.precio) || 0), 0);
   return [
     nombreCliente(r),
     r.celular,
     r.vendedora,
     r.tienda,
     fmtFecha(r.fechaRegistro),
-    fmtFecha(r.fechaLimite),
+    fmtFecha(v.limite),
     v.ps.length,
     v.ps.filter((p) => p.fechaEntrega).length,
-    total,
     ESTADOS_RESERVA[v.estado],
     r.observaciones || '',
   ];
@@ -560,11 +587,7 @@ export function filaPrenda(p, v) {
     r.celular,
     r.vendedora,
     p.sku,
-    p.descripcion,
     p.subclase,
-    p.talla,
-    p.color,
-    p.precio === '' ? '' : Number(p.precio),
     p.tiendaSolicitante || r.tienda,
     p.enStock ? '(stock en tienda)' : p.tiendaOrigen,
     ESTADOS[estado].label,
@@ -575,9 +598,10 @@ export function filaPrenda(p, v) {
     fmtFecha(p.fechaCorreo),
     fmtFecha(p.fechaTraslado),
     fmtFecha(p.fechaRecepcion),
+    fmtFecha(v.lims[idx]),
     fmtFecha(p.fechaEntrega),
-    fmtFecha(r.fechaLimite),
     p.obsSolicitud || '',
+    p.obs || '',
   ];
 }
 
@@ -589,7 +613,7 @@ function filasPrendas(vistas, pred) {
   return filas;
 }
 
-const vivaNoEntregada = (p) => !p.fechaCancelacion;
+const viva = (p) => !p.fechaCancelacion;
 
 export function generarReporte(id, vistas, f = {}) {
   const base = filtrar(vistas, { desde: f.desde, hasta: f.hasta, vendedora: f.vendedora });
@@ -616,24 +640,21 @@ export function generarReporte(id, vistas, f = {}) {
       return {
         ...out,
         columnas: COLS_PRENDA,
-        filas: filasPrendas(base, (p) => p.resultadoConsulta === 'disponible' && vivaNoEntregada(p)),
+        filas: filasPrendas(base, (p) => p.resultadoConsulta === 'disponible' && viva(p)),
       };
     case 'conCorreo':
-      return { ...out, columnas: COLS_PRENDA, filas: filasPrendas(base, (p) => p.correoEnviado && vivaNoEntregada(p)) };
+      return { ...out, columnas: COLS_PRENDA, filas: filasPrendas(base, (p) => p.correoEnviado && viva(p)) };
     case 'sinCorreo':
       return {
         ...out,
         columnas: COLS_PRENDA,
-        filas: filasPrendas(
-          base,
-          (p) => p.resultadoConsulta === 'disponible' && !p.correoEnviado && vivaNoEntregada(p) && !p.fechaEntrega,
-        ),
+        filas: filasPrendas(base, (p) => p.resultadoConsulta === 'disponible' && !p.correoEnviado && viva(p) && !p.fechaEntrega),
       };
     case 'porRecibir':
       return {
         ...out,
         columnas: COLS_PRENDA,
-        filas: filasPrendas(base, (p) => p.correoEnviado && !p.fechaRecepcion && vivaNoEntregada(p)),
+        filas: filasPrendas(base, (p) => p.correoEnviado && !p.fechaRecepcion && viva(p)),
       };
     case 'cerradas': {
       const orden = ['entregada', 'cancelada', 'vencida'];

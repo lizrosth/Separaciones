@@ -1,5 +1,5 @@
 // Service worker: guarda la aplicación en el dispositivo para que funcione sin conexión.
-const CACHE = 'separaciones-v2';
+const CACHE = 'separaciones-v3';
 const ARCHIVOS = [
   './',
   'index.html',
